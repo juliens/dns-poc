@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -18,7 +19,12 @@ func main() {
 			if q.Qtype != dns.TypeA {
 				continue
 			}
-			ip := findDNS(q.Name, root)
+			ip, msgResponse, err := findDNS(q.Name, root)
+			if err != nil {
+				writer.WriteMsg(msgResponse)
+				return
+			}
+
 			fmt.Println(ip)
 			rr, err := dns.NewRR(fmt.Sprintf("%s %d IN A %s", q.Name, 60, ip))
 			if err != nil {
@@ -42,11 +48,11 @@ func main() {
 var root net.IP
 var cache map[string]net.IP
 
-func findDNS(name string, dnsServer net.IP) net.IP {
+func findDNS(name string, dnsServer net.IP) (net.IP, *dns.Msg, error) {
 	fmt.Println("ASK", name, dnsServer)
 	if ip, ok := cache[name]; ok {
 		fmt.Println("FOUND IN CACHE", name, ip)
-		return ip
+		return ip, nil, nil
 	}
 
 	if name[len(name)-1:] != "." {
@@ -58,21 +64,25 @@ func findDNS(name string, dnsServer net.IP) net.IP {
 	c := new(dns.Client)
 	conn, err := c.Dial(dnsServer.String()+":53")
 	if err != nil {
-		log.Fatalf("failed to dial: %v", err)
+		return nil, nil, fmt.Errorf("failed to dial: %w", err)
 	}
 	if conn == nil {
-		log.Fatalf("conn is nil")
+		return nil, nil, errors.New("conn is nil")
 	}
 	err = conn.WriteMsg(m)
 	if err != nil {
-		log.Fatal(m, err)
+		return nil, nil, err
 	}
 
 	msg, err := conn.ReadMsg()
 	if err != nil {
-		log.Fatal(err)
+		return nil, nil, err
 	}
-	// fmt.Println(msg)
+	// fmt.Println(msg.String())
+	if msg.Rcode != dns.RcodeSuccess {
+		return nil, msg, fmt.Errorf("error while resolve: %s", dns.RcodeToString[msg.Rcode])
+	}
+
 
 	for _, rr := range msg.Extra {
 		switch x := rr.(type) {
@@ -86,7 +96,7 @@ func findDNS(name string, dnsServer net.IP) net.IP {
 		switch x := rr.(type) {
 		case *dns.A:
 			fmt.Println("FOUND", name, x.A)
-			return x.A
+			return x.A, nil, nil
 		case *dns.CNAME:
 			fmt.Println("FIND CNAME", x.Target)
 			return findDNS(x.Target, root)
@@ -99,10 +109,14 @@ func findDNS(name string, dnsServer net.IP) net.IP {
 		switch x := rr.(type) {
 		case *dns.NS:
 			fmt.Println("NS", x.Ns)
-			return findDNS(name, findDNS(x.Ns, root))
+			ip, msgResponse, err := findDNS(x.Ns, root)
+			if err != nil {
+				return nil, msgResponse, err
+			}
+			return findDNS(name, ip)
 		case *dns.A:
 			// fmt.Println("FOUND", name, x.A)
-			return x.A
+			return x.A, nil, nil
 		case *dns.CNAME:
 			return findDNS(x.Target, root)
 		default:
@@ -110,5 +124,5 @@ func findDNS(name string, dnsServer net.IP) net.IP {
 		}
 	}
 
-	return nil
+	return nil, nil, nil
 }
