@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -12,20 +13,24 @@ import (
 func main() {
 	cache = map[string]net.IP{}
 	// a.root-servers.net
-	root = net.ParseIP("198.41.0.4")
+	server := flag.String("root-server", "198.41.0.4", "root server ip to use")
+	listen := flag.String("listen", ":8053", "address to listen on")
+	flag.Parse()
 
-	err := dns.ListenAndServe("127.0.0.1:8053", "udp", dns.HandlerFunc(func(writer dns.ResponseWriter, msg *dns.Msg) {
+	root = net.ParseIP(*server)
+
+	log.Printf("Listen on %q", *listen)
+	err := dns.ListenAndServe(*listen, "udp", dns.HandlerFunc(func(writer dns.ResponseWriter, msg *dns.Msg) {
 		for _, q := range msg.Question {
 			if q.Qtype != dns.TypeA {
 				continue
 			}
-			ip, msgResponse, err := findDNS(q.Name, root)
+			ip, msgResponse, err := findDNS(q.Name, root, "")
 			if err != nil {
 				writer.WriteMsg(msgResponse)
 				return
 			}
-
-			fmt.Println(ip)
+			
 			rr, err := dns.NewRR(fmt.Sprintf("%s %d IN A %s", q.Name, 60, ip))
 			if err != nil {
 				continue
@@ -48,10 +53,10 @@ func main() {
 var root net.IP
 var cache map[string]net.IP
 
-func findDNS(name string, dnsServer net.IP) (net.IP, *dns.Msg, error) {
-	fmt.Println("ASK", name, dnsServer)
+func findDNS(name string, dnsServer net.IP, logPrefix string) (net.IP, *dns.Msg, error) {
+	log.Printf(logPrefix + "ASK %s, %s", name, dnsServer)
 	if ip, ok := cache[name]; ok {
-		fmt.Println("FOUND IN CACHE", name, ip)
+		log.Printf(logPrefix + "FOUND IN CACHE %s %s", name, ip)
 		return ip, nil, nil
 	}
 
@@ -78,7 +83,6 @@ func findDNS(name string, dnsServer net.IP) (net.IP, *dns.Msg, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// fmt.Println(msg.String())
 	if msg.Rcode != dns.RcodeSuccess {
 		return nil, msg, fmt.Errorf("error while resolve: %s", dns.RcodeToString[msg.Rcode])
 	}
@@ -87,7 +91,6 @@ func findDNS(name string, dnsServer net.IP) (net.IP, *dns.Msg, error) {
 	for _, rr := range msg.Extra {
 		switch x := rr.(type) {
 		case *dns.A:
-			// fmt.Println("Add in cache", x.Hdr.Name, x.A)
 			cache[x.Hdr.Name] = x.A
 		}
 	}
@@ -95,32 +98,31 @@ func findDNS(name string, dnsServer net.IP) (net.IP, *dns.Msg, error) {
 	for _, rr := range msg.Answer {
 		switch x := rr.(type) {
 		case *dns.A:
-			fmt.Println("FOUND", name, x.A)
+			log.Printf(logPrefix + "FOUND %s %s", name, x.A)
 			return x.A, nil, nil
 		case *dns.CNAME:
-			fmt.Println("FIND CNAME", x.Target)
-			return findDNS(x.Target, root)
+			log.Printf(logPrefix + "FIND CNAME %s", x.Target)
+			return findDNS(x.Target, root, logPrefix)
 		default:
-			log.Println("Ignore", x)
+			log.Printf(logPrefix + "Ignore %s", x)
 		}
 	}
 
 	for _, rr := range msg.Ns {
 		switch x := rr.(type) {
 		case *dns.NS:
-			fmt.Println("NS", x.Ns)
-			ip, msgResponse, err := findDNS(x.Ns, root)
+			log.Printf(logPrefix + "NS %s", x.Ns)
+			ip, msgResponse, err := findDNS(x.Ns, root, logPrefix + "----")
 			if err != nil {
 				return nil, msgResponse, err
 			}
-			return findDNS(name, ip)
+			return findDNS(name, ip, logPrefix)
 		case *dns.A:
-			// fmt.Println("FOUND", name, x.A)
 			return x.A, nil, nil
 		case *dns.CNAME:
-			return findDNS(x.Target, root)
+			return findDNS(x.Target, root, logPrefix)
 		default:
-			log.Println("Ignore", x)
+			log.Printf(logPrefix + "Ignore %s", x)
 		}
 	}
 
