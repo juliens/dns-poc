@@ -1,4 +1,4 @@
-module github.com/juliens/dns-client
+module github.com/juliens/dns-poc
 
 go 1.17
 
