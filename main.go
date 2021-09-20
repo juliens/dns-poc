@@ -13,7 +13,7 @@ func main() {
 	// a.root-servers.net
 	root = net.ParseIP("198.41.0.4")
 
-	dns.ListenAndServe("127.0.0.1:8053", "udp", dns.HandlerFunc(func(writer dns.ResponseWriter, msg *dns.Msg) {
+	err := dns.ListenAndServe("127.0.0.1:8053", "udp", dns.HandlerFunc(func(writer dns.ResponseWriter, msg *dns.Msg) {
 		for _, q := range msg.Question {
 			if q.Qtype != dns.TypeA {
 				continue
@@ -28,9 +28,15 @@ func main() {
 			m := new(dns.Msg)
 			m.SetReply(msg)
 			m.Answer = append(m.Answer, rr)
-			writer.WriteMsg(m)
+			err = writer.WriteMsg(m)
+			if err != nil {
+				log.Fatal(err)
+			}
 		}
-	}) )
+	}))
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 var root net.IP
@@ -46,7 +52,7 @@ func findDNS(name string, dnsServer net.IP) net.IP {
 	if name[len(name)-1:] != "." {
 		name += "."
 	}
- 	m := new(dns.Msg)
+	m := new(dns.Msg)
 	m.SetQuestion(name, dns.TypeA)
 
 	c := new(dns.Client)
@@ -63,13 +69,16 @@ func findDNS(name string, dnsServer net.IP) net.IP {
 	}
 
 	msg, err := conn.ReadMsg()
+	if err != nil {
+		log.Fatal(err)
+	}
 	// fmt.Println(msg)
 
 	for _, rr := range msg.Extra {
 		switch x := rr.(type) {
-			case *dns.A:
-				// fmt.Println("Add in cache", x.Hdr.Name, x.A)
-				cache[x.Hdr.Name] = x.A
+		case *dns.A:
+			// fmt.Println("Add in cache", x.Hdr.Name, x.A)
+			cache[x.Hdr.Name] = x.A
 		}
 	}
 
